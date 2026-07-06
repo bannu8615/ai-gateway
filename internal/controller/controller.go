@@ -115,7 +115,13 @@ type Options struct {
 //
 // Note: this is tested with envtest, hence the test exists outside of this package. See /tests/controller_test.go.
 func StartControllers(ctx context.Context, mgr manager.Manager, config *rest.Config, logger logr.Logger, options *Options) (err error) {
-	c := mgr.GetClient()
+	if err = initializeControlPlaneTelemetry(ctx); err != nil {
+		return fmt.Errorf("failed to initialize control-plane telemetry: %w", err)
+	}
+	defer func() {
+		_ = shutdownControlPlaneTelemetry(context.Background())
+	}()
+	c := controlPlaneTelemetry.wrapClient(mgr.GetClient())
 	indexer := mgr.GetFieldIndexer()
 	if err = ApplyIndexing(ctx, indexer.IndexField); err != nil {
 		return fmt.Errorf("failed to apply indexing: %w", err)
@@ -216,6 +222,7 @@ func StartControllers(ctx context.Context, mgr manager.Manager, config *rest.Con
 	// Do not use TypedControllerBuilderForCRD for secret, as changing a secret content doesn't change the generation.
 	if err = ctrl.NewControllerManagedBy(mgr).
 		For(&corev1.Secret{}).
+		WithEventFilter(controlPlaneTelemetry.watchPredicate()).
 		Complete(secretC); err != nil {
 		return fmt.Errorf("failed to create controller for Secret: %w", err)
 	}
@@ -299,7 +306,7 @@ func TypedControllerBuilderForCRD(mgr ctrl.Manager, obj client.Object) *ctrl.Bui
 	return ctrl.NewControllerManagedBy(mgr).
 		For(obj).
 		// We do not need to watch for changes in the status subresource.
-		WithEventFilter(predicate.GenerationChangedPredicate{})
+		WithEventFilter(predicate.And(predicate.GenerationChangedPredicate{}, controlPlaneTelemetry.watchPredicate()))
 }
 
 const (

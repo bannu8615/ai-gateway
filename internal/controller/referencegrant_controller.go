@@ -46,6 +46,8 @@ func NewReferenceGrantController(
 
 // Reconcile implements the [reconcile.TypedReconciler] for ReferenceGrant.
 func (c *ReferenceGrantController) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
+	ctx, span := startReconcileSpan(ctx, "ReferenceGrantController", "ReferenceGrant", req.NamespacedName)
+	defer span.End()
 	c.logger.Info("Reconciling ReferenceGrant", "namespace", req.Namespace, "name", req.Name)
 
 	var referenceGrant gwapiv1b1.ReferenceGrant
@@ -74,7 +76,7 @@ func (c *ReferenceGrantController) Reconcile(ctx context.Context, req reconcile.
 		c.logger.Info("Triggering reconciliation for affected AIGatewayRoute",
 			"route_namespace", route.Namespace, "route_name", route.Name,
 			"grant_namespace", referenceGrant.Namespace, "grant_name", referenceGrant.Name)
-		c.aiGatewayRouteChan <- event.GenericEvent{Object: route}
+		emitGenericEvent(ctx, c.aiGatewayRouteChan, route, "ReferenceGrantController", "AIGatewayRouteController", "reference grant changed")
 	}
 
 	return reconcile.Result{}, nil

@@ -43,6 +43,8 @@ func NewAIServiceBackendController(client client.Client, kube kubernetes.Interfa
 
 // Reconcile implements the [reconcile.TypedReconciler] for [aigv1b1.AIServiceBackend].
 func (c *AIBackendController) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
+	ctx, span := startReconcileSpan(ctx, "AIServiceBackendController", "AIServiceBackend", req.NamespacedName)
+	defer span.End()
 	var aiBackend aigv1b1.AIServiceBackend
 	if err := c.client.Get(ctx, req.NamespacedName, &aiBackend); err != nil {
 		if client.IgnoreNotFound(err) == nil {
@@ -95,7 +97,7 @@ func (c *AIBackendController) syncAIServiceBackend(ctx context.Context, aiBacken
 			"namespace", aiGatewayRoute.Namespace, "name", aiGatewayRoute.Name,
 			"referenced_backend", aiBackend.Name, "referenced_backend_namespace", aiBackend.Namespace,
 		)
-		c.aiGatewayRouteChan <- event.GenericEvent{Object: aiGatewayRoute}
+		emitGenericEvent(ctx, c.aiGatewayRouteChan, aiGatewayRoute, "AIServiceBackendController", "AIGatewayRouteController", "backend changed")
 	}
 	return nil
 }

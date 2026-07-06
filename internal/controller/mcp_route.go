@@ -62,6 +62,8 @@ func NewMCPRouteController(
 
 // Reconcile implements [reconcile.TypedReconciler].
 func (c *MCPRouteController) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
+	ctx, span := startReconcileSpan(ctx, "MCPRouteController", "MCPRoute", req.NamespacedName)
+	defer span.End()
 	c.logger.Info("Reconciling MCPRoute", "namespace", req.Namespace, "name", req.Name)
 
 	var MCPRoute aigv1b1.MCPRoute
@@ -255,7 +257,10 @@ func (c *MCPRouteController) deleteOrphanedPerBackendResources(ctx context.Conte
 		// Credential secrets are only created for backends with secretRef-based API keys, but we
 		// unconditionally attempt the delete to avoid an extra GET call.
 		credSecretName := internalapi.MCPPerBackendCredentialSecretPrefix + strings.TrimPrefix(name, internalapi.MCPPerBackendRefHTTPRoutePrefix)
-		if err := c.kube.CoreV1().Secrets(mcpRoute.Namespace).Delete(ctx, credSecretName, metav1.DeleteOptions{}); err != nil {
+		err := controlPlaneTelemetry.traceNamedOperation(ctx, "controlplane.kube.secret.delete", "delete", "Secret", mcpRoute.Namespace, credSecretName, func() error {
+			return c.kube.CoreV1().Secrets(mcpRoute.Namespace).Delete(ctx, credSecretName, metav1.DeleteOptions{})
+		})
+		if err != nil {
 			if !apierrors.IsNotFound(err) {
 				return fmt.Errorf("failed to delete orphaned credential secret %s: %w", credSecretName, err)
 			}
@@ -494,7 +499,7 @@ func (c *MCPRouteController) syncGateway(ctx context.Context, namespace, name st
 		return fmt.Errorf("failed to get Gateway %s/%s: %w", namespace, name, err)
 	}
 	c.logger.Info("Syncing Gateway", "namespace", gw.Namespace, "name", gw.Name)
-	c.gatewayEventChan <- event.GenericEvent{Object: &gw}
+	emitGenericEvent(ctx, c.gatewayEventChan, &gw, "MCPRouteController", "GatewayController", "mcp route changed")
 	return nil
 }
 
@@ -748,7 +753,9 @@ func (c *MCPRouteController) ensureMCPBackendRefHTTPFilter(ctx context.Context, 
 		}
 		// Delete only on credential-injection transitions to avoid per-reconcile Delete calls.
 		if previousCredentialSecretName != "" && previousCredentialSecretName != credentialSecretName {
-			deleteErr := c.kube.CoreV1().Secrets(mcpRoute.Namespace).Delete(ctx, previousCredentialSecretName, metav1.DeleteOptions{})
+			deleteErr := controlPlaneTelemetry.traceNamedOperation(ctx, "controlplane.kube.secret.delete", "delete", "Secret", mcpRoute.Namespace, previousCredentialSecretName, func() error {
+				return c.kube.CoreV1().Secrets(mcpRoute.Namespace).Delete(ctx, previousCredentialSecretName, metav1.DeleteOptions{})
+			})
 			if deleteErr != nil && !apierrors.IsNotFound(deleteErr) {
 				return fmt.Errorf("failed to delete stale credential secret %s: %w", previousCredentialSecretName, deleteErr)
 			}
@@ -801,7 +808,11 @@ func (c *MCPRouteController) ensureCredentialSecret(ctx context.Context, secretN
 			return fmt.Errorf("failed to get credential secret: %w", err)
 		}
 		c.logger.Info("Creating credential secret", "namespace", mcpRoute.Namespace, "name", secretName)
-		if _, err = c.kube.CoreV1().Secrets(mcpRoute.Namespace).Create(ctx, desired, metav1.CreateOptions{}); err != nil {
+		controlPlaneTelemetry.inject(ctx, desired)
+		if err = controlPlaneTelemetry.traceObjectWrite(ctx, "controlplane.kube.secret.create", "create", desired, func() error {
+			_, createErr := c.kube.CoreV1().Secrets(mcpRoute.Namespace).Create(ctx, desired, metav1.CreateOptions{})
+			return createErr
+		}, false); err != nil {
 			return fmt.Errorf("failed to create credential secret: %w", err)
 		}
 		return nil
@@ -811,7 +822,11 @@ func (c *MCPRouteController) ensureCredentialSecret(ctx context.Context, secretN
 	if string(existing.Data[egv1a1.InjectedCredentialKey]) != credentialValue {
 		existing.Data = desired.Data
 		c.logger.Info("Updating credential secret", "namespace", mcpRoute.Namespace, "name", secretName)
-		if _, err = c.kube.CoreV1().Secrets(mcpRoute.Namespace).Update(ctx, existing, metav1.UpdateOptions{}); err != nil {
+		controlPlaneTelemetry.inject(ctx, existing)
+		if err = controlPlaneTelemetry.traceObjectWrite(ctx, "controlplane.kube.secret.update", "update", existing, func() error {
+			_, updateErr := c.kube.CoreV1().Secrets(mcpRoute.Namespace).Update(ctx, existing, metav1.UpdateOptions{})
+			return updateErr
+		}, false); err != nil {
 			return fmt.Errorf("failed to update credential secret: %w", err)
 		}
 	}
