@@ -74,6 +74,8 @@ func NewBackendSecurityPolicyController(client client.Client, kube kubernetes.In
 
 // Reconcile implements the [reconcile.TypedReconciler] for [aigv1b1.BackendSecurityPolicy].
 func (c *BackendSecurityPolicyController) Reconcile(ctx context.Context, req ctrl.Request) (res ctrl.Result, err error) {
+	ctx, span := startReconcileSpan(ctx, "BackendSecurityPolicyController", "BackendSecurityPolicy", req.NamespacedName)
+	defer span.End()
 	var bsp aigv1b1.BackendSecurityPolicy
 	if err = c.client.Get(ctx, req.NamespacedName, &bsp); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -347,7 +349,7 @@ func (c *BackendSecurityPolicyController) syncBackendSecurityPolicy(ctx context.
 				continue
 			}
 			c.logger.Info("Syncing AIServiceBackend", "namespace", aiBackend.Namespace, "name", aiBackend.Name)
-			c.aiServiceBackendEventChan <- event.GenericEvent{Object: &aiBackend}
+			emitGenericEvent(ctx, c.aiServiceBackendEventChan, &aiBackend, "BackendSecurityPolicyController", "AIServiceBackendController", "backend security policy changed")
 		case targetRef.Group == inferencePoolGroup && targetRef.Kind == inferencePoolKind:
 			var inferencePool gwaiev1.InferencePool
 			err := c.client.Get(ctx, client.ObjectKey{
@@ -362,7 +364,7 @@ func (c *BackendSecurityPolicyController) syncBackendSecurityPolicy(ctx context.
 				continue
 			}
 			c.logger.Info("Syncing InferencePool", "namespace", inferencePool.Namespace, "name", inferencePool.Name)
-			c.inferencePoolEventChan <- event.GenericEvent{Object: &inferencePool}
+			emitGenericEvent(ctx, c.inferencePoolEventChan, &inferencePool, "BackendSecurityPolicyController", "InferencePoolController", "backend security policy changed")
 		}
 	}
 

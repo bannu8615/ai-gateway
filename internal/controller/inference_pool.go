@@ -51,6 +51,8 @@ func NewInferencePoolController(
 
 // Reconcile implements the [reconcile.TypedReconciler] for [gwaiev1.InferencePool].
 func (c *InferencePoolController) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
+	ctx, span := startReconcileSpan(ctx, "InferencePoolController", "InferencePool", req.NamespacedName)
+	defer span.End()
 	var inferencePool gwaiev1.InferencePool
 	if err := c.client.Get(ctx, req.NamespacedName, &inferencePool); err != nil {
 		if client.IgnoreNotFound(err) == nil {
@@ -323,11 +325,13 @@ func (c *InferencePoolController) gatewayEventHandler(ctx context.Context, obj c
 		pool := &inferencePools.Items[i]
 		// Check if this Gateway references the InferencePool.
 		if c.gatewayReferencesInferencePool(ctx, gateway, pool.Name, pool.Namespace) {
+			key := client.ObjectKey{
+				Name:      pool.Name,
+				Namespace: pool.Namespace,
+			}
+			enqueueMappedRequest(ctx, gateway, "InferencePool", key, "Gateway", "InferencePoolController", "gateway changed")
 			requests = append(requests, reconcile.Request{
-				NamespacedName: client.ObjectKey{
-					Name:      pool.Name,
-					Namespace: pool.Namespace,
-				},
+				NamespacedName: key,
 			})
 		}
 	}
@@ -336,7 +340,7 @@ func (c *InferencePoolController) gatewayEventHandler(ctx context.Context, obj c
 }
 
 // aiGatewayRouteEventHandler returns an event handler for AIGatewayRoute resources.
-func (c *InferencePoolController) aiGatewayRouteEventHandler(_ context.Context, obj client.Object) []reconcile.Request {
+func (c *InferencePoolController) aiGatewayRouteEventHandler(ctx context.Context, obj client.Object) []reconcile.Request {
 	route, ok := obj.(*aigv1b1.AIGatewayRoute)
 	if !ok {
 		return nil
@@ -347,11 +351,13 @@ func (c *InferencePoolController) aiGatewayRouteEventHandler(_ context.Context, 
 	for _, rule := range route.Spec.Rules {
 		for _, backendRef := range rule.BackendRefs {
 			if backendRef.IsInferencePool() {
+				key := client.ObjectKey{
+					Name:      backendRef.Name,
+					Namespace: route.Namespace,
+				}
+				enqueueMappedRequest(ctx, route, "InferencePool", key, "AIGatewayRoute", "InferencePoolController", "route changed")
 				requests = append(requests, reconcile.Request{
-					NamespacedName: client.ObjectKey{
-						Name:      backendRef.Name,
-						Namespace: route.Namespace,
-					},
+					NamespacedName: key,
 				})
 			}
 		}
@@ -361,7 +367,7 @@ func (c *InferencePoolController) aiGatewayRouteEventHandler(_ context.Context, 
 }
 
 // httpRouteEventHandler returns an event handler for HTTPRoute resources.
-func (c *InferencePoolController) httpRouteEventHandler(_ context.Context, obj client.Object) []reconcile.Request {
+func (c *InferencePoolController) httpRouteEventHandler(ctx context.Context, obj client.Object) []reconcile.Request {
 	route, ok := obj.(*gwapiv1.HTTPRoute)
 	if !ok {
 		return nil
@@ -373,11 +379,13 @@ func (c *InferencePoolController) httpRouteEventHandler(_ context.Context, obj c
 		for _, backendRef := range rule.BackendRefs {
 			if backendRef.Group != nil && string(*backendRef.Group) == "inference.networking.k8s.io" &&
 				backendRef.Kind != nil && string(*backendRef.Kind) == "InferencePool" {
+				key := client.ObjectKey{
+					Name:      string(backendRef.Name),
+					Namespace: route.Namespace,
+				}
+				enqueueMappedRequest(ctx, route, "InferencePool", key, "HTTPRoute", "InferencePoolController", "http route changed")
 				requests = append(requests, reconcile.Request{
-					NamespacedName: client.ObjectKey{
-						Name:      string(backendRef.Name),
-						Namespace: route.Namespace,
-					},
+					NamespacedName: key,
 				})
 			}
 		}

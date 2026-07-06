@@ -87,6 +87,8 @@ type GatewayController struct {
 
 // Reconcile implements the reconcile.Reconciler for gwapiv1.Gateway.
 func (c *GatewayController) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	ctx, span := startReconcileSpan(ctx, "GatewayController", "Gateway", req.NamespacedName)
+	defer span.End()
 	gw := &gwapiv1.Gateway{}
 	if err := c.client.Get(ctx, req.NamespacedName, gw); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -542,7 +544,11 @@ func (c *GatewayController) reconcileFilterConfigSecret(
 				ObjectMeta: metav1.ObjectMeta{Name: configSecretName, Namespace: configSecretNamespace},
 				StringData: data,
 			}
-			if _, err = c.kube.CoreV1().Secrets(configSecretNamespace).Create(ctx, secret, metav1.CreateOptions{}); err != nil {
+			controlPlaneTelemetry.inject(ctx, secret)
+			if err = controlPlaneTelemetry.traceObjectWrite(ctx, "controlplane.kube.secret.create", "create", secret, func() error {
+				_, createErr := c.kube.CoreV1().Secrets(configSecretNamespace).Create(ctx, secret, metav1.CreateOptions{})
+				return createErr
+			}, false); err != nil {
 				return false, fmt.Errorf("failed to create secret %s: %w", configSecretName, err)
 			}
 			return hasEffectiveRoute, nil
@@ -551,7 +557,11 @@ func (c *GatewayController) reconcileFilterConfigSecret(
 	}
 
 	secret.StringData = data
-	if _, err := c.kube.CoreV1().Secrets(configSecretNamespace).Update(ctx, secret, metav1.UpdateOptions{}); err != nil {
+	controlPlaneTelemetry.inject(ctx, secret)
+	if err := controlPlaneTelemetry.traceObjectWrite(ctx, "controlplane.kube.secret.update", "update", secret, func() error {
+		_, updateErr := c.kube.CoreV1().Secrets(configSecretNamespace).Update(ctx, secret, metav1.UpdateOptions{})
+		return updateErr
+	}, false); err != nil {
 		return false, fmt.Errorf("failed to update secret %s: %w", secret.Name, err)
 	}
 	return hasEffectiveRoute, nil
@@ -1091,10 +1101,13 @@ func (c *GatewayController) annotateGatewayPods(ctx context.Context,
 			continue
 		}
 		c.logger.Info("annotating pod", "namespace", pod.Namespace, "name", pod.Name)
-		_, err := c.kube.CoreV1().Pods(pod.Namespace).Patch(ctx, pod.Name, types.MergePatchType,
-			fmt.Appendf(nil,
-				`{"metadata":{"annotations":{"%s":"%s"}}}`, aigatewayUUIDAnnotationKey, uuid),
-			metav1.PatchOptions{})
+		err := controlPlaneTelemetry.traceNamedOperation(ctx, "controlplane.kube.pod.patch", "patch", "Pod", pod.Namespace, pod.Name, func() error {
+			_, patchErr := c.kube.CoreV1().Pods(pod.Namespace).Patch(ctx, pod.Name, types.MergePatchType,
+				fmt.Appendf(nil,
+					`{"metadata":{"annotations":{"%s":"%s"}}}`, aigatewayUUIDAnnotationKey, uuid),
+				metav1.PatchOptions{})
+			return patchErr
+		})
 		if err != nil {
 			return ctrl.Result{}, fmt.Errorf("failed to patch pod %s: %w", pod.Name, err)
 		}
@@ -1109,10 +1122,13 @@ func (c *GatewayController) annotateGatewayPods(ctx context.Context,
 		for i := range deployments {
 			dep := &deployments[i]
 			c.logger.Info("rolling out deployment", "namespace", dep.Namespace, "name", dep.Name)
-			_, err := c.kube.AppsV1().Deployments(dep.Namespace).Patch(ctx, dep.Name, types.MergePatchType,
-				fmt.Appendf(nil,
-					`{"spec":{"template":{"metadata":{"annotations":{"%s":"%s"}}}}}`, aigatewayUUIDAnnotationKey, uuid),
-				metav1.PatchOptions{})
+			err := controlPlaneTelemetry.traceNamedOperation(ctx, "controlplane.kube.deployment.patch", "patch", "Deployment", dep.Namespace, dep.Name, func() error {
+				_, patchErr := c.kube.AppsV1().Deployments(dep.Namespace).Patch(ctx, dep.Name, types.MergePatchType,
+					fmt.Appendf(nil,
+						`{"spec":{"template":{"metadata":{"annotations":{"%s":"%s"}}}}}`, aigatewayUUIDAnnotationKey, uuid),
+					metav1.PatchOptions{})
+				return patchErr
+			})
 			if err != nil {
 				return ctrl.Result{}, fmt.Errorf("failed to patch deployment %s: %w", dep.Name, err)
 			}
@@ -1121,10 +1137,13 @@ func (c *GatewayController) annotateGatewayPods(ctx context.Context,
 		for i := range daemonSets {
 			daemonSet := &daemonSets[i]
 			c.logger.Info("rolling out daemonSet", "namespace", daemonSet.Namespace, "name", daemonSet.Name)
-			_, err := c.kube.AppsV1().DaemonSets(daemonSet.Namespace).Patch(ctx, daemonSet.Name, types.MergePatchType,
-				fmt.Appendf(nil,
-					`{"spec":{"template":{"metadata":{"annotations":{"%s":"%s"}}}}}`, aigatewayUUIDAnnotationKey, uuid),
-				metav1.PatchOptions{})
+			err := controlPlaneTelemetry.traceNamedOperation(ctx, "controlplane.kube.daemonset.patch", "patch", "DaemonSet", daemonSet.Namespace, daemonSet.Name, func() error {
+				_, patchErr := c.kube.AppsV1().DaemonSets(daemonSet.Namespace).Patch(ctx, daemonSet.Name, types.MergePatchType,
+					fmt.Appendf(nil,
+						`{"spec":{"template":{"metadata":{"annotations":{"%s":"%s"}}}}}`, aigatewayUUIDAnnotationKey, uuid),
+					metav1.PatchOptions{})
+				return patchErr
+			})
 			if err != nil {
 				return ctrl.Result{}, fmt.Errorf("failed to patch daemonset %s: %w", daemonSet.Name, err)
 			}

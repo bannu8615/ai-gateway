@@ -46,6 +46,8 @@ func NewSecretController(client client.Client, kubeClient kubernetes.Interface,
 
 // Reconcile implements the reconcile.Reconciler for corev1.Secret.
 func (c *secretController) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	ctx, span := startReconcileSpan(ctx, "SecretController", "Secret", req.NamespacedName)
+	defer span.End()
 	var secret corev1.Secret
 	if err := c.client.Get(ctx, req.NamespacedName, &secret); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -75,7 +77,7 @@ func (c *secretController) syncSecret(ctx context.Context, namespace, name strin
 		backendSecurityPolicy := &backendSecurityPolicies.Items[i]
 		c.logger.Info("Syncing BackendSecurityPolicy",
 			"namespace", backendSecurityPolicy.Namespace, "name", backendSecurityPolicy.Name)
-		c.backendSecurityPolicyEventChan <- event.GenericEvent{Object: backendSecurityPolicy}
+		emitGenericEvent(ctx, c.backendSecurityPolicyEventChan, backendSecurityPolicy, "SecretController", "BackendSecurityPolicyController", "secret reference changed")
 	}
 
 	var mcpRoutes aigv1b1.MCPRouteList
@@ -91,7 +93,7 @@ func (c *secretController) syncSecret(ctx context.Context, namespace, name strin
 		mcpRoute := &mcpRoutes.Items[i]
 		c.logger.Info("Syncing MCPRoute",
 			"namespace", mcpRoute.Namespace, "name", mcpRoute.Name)
-		c.mcpRouteEventChan <- event.GenericEvent{Object: mcpRoute}
+		emitGenericEvent(ctx, c.mcpRouteEventChan, mcpRoute, "SecretController", "MCPRouteController", "secret reference changed")
 	}
 	return nil
 }

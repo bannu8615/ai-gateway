@@ -60,6 +60,8 @@ func NewQuotaPolicyController(
 
 // Reconcile implements [reconcile.TypedReconciler] for [aigv1a1.QuotaPolicy].
 func (c *QuotaPolicyController) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
+	ctx, span := startReconcileSpan(ctx, "QuotaPolicyController", "QuotaPolicy", req.NamespacedName)
+	defer span.End()
 	var quotaPolicy aigv1a1.QuotaPolicy
 	if err := c.client.Get(ctx, req.NamespacedName, &quotaPolicy); err != nil {
 		if client.IgnoreNotFound(err) == nil {
@@ -141,7 +143,9 @@ func (c *QuotaPolicyController) syncQuotaPolicy(ctx context.Context, policy *aig
 	c.configCache[cacheKey] = configs
 	allConfigs := c.getMergedConfigsLocked()
 
-	return c.rateLimitRunner.UpdateConfigs(ctx, allConfigs)
+	return controlPlaneTelemetry.traceNamedOperation(ctx, "controlplane.xds.publish", "xdsPublish", "QuotaPolicy", policy.Namespace, policy.Name, func() error {
+		return c.rateLimitRunner.UpdateConfigs(ctx, allConfigs)
+	})
 }
 
 // deleteQuotaPolicyConfig removes a QuotaPolicy's configs from the cache
@@ -153,7 +157,9 @@ func (c *QuotaPolicyController) deleteQuotaPolicyConfig(ctx context.Context, key
 	delete(c.configCache, cacheKey)
 	allConfigs := c.getMergedConfigsLocked()
 
-	return c.rateLimitRunner.UpdateConfigs(ctx, allConfigs)
+	return controlPlaneTelemetry.traceNamedOperation(ctx, "controlplane.xds.publish", "xdsPublish", "QuotaPolicy", key.Namespace, key.Name, func() error {
+		return c.rateLimitRunner.UpdateConfigs(ctx, allConfigs)
+	})
 }
 
 // getMergedConfigsLocked merges all cached configs into a single RateLimitConfig.
@@ -201,8 +207,10 @@ func (c *QuotaPolicyController) BackendToQuotaPolicy(ctx context.Context, obj cl
 	var requests []reconcile.Request
 	for i := range quotaPolicies.Items {
 		qp := &quotaPolicies.Items[i]
+		key := client.ObjectKeyFromObject(qp)
+		enqueueMappedRequest(ctx, obj, "QuotaPolicy", key, "AIServiceBackend", "QuotaPolicyController", "backend changed")
 		requests = append(requests, reconcile.Request{
-			NamespacedName: client.ObjectKeyFromObject(qp),
+			NamespacedName: key,
 		})
 	}
 	return requests
@@ -226,7 +234,7 @@ func (c *QuotaPolicyController) notifyAIGatewayRoutes(ctx context.Context, polic
 			c.logger.Info("notifying AIGatewayRoute of QuotaPolicy change",
 				"route", route.Name, "namespace", route.Namespace,
 				"quotaPolicy", policy.Name)
-			c.aiGatewayRouteChan <- event.GenericEvent{Object: route}
+			emitGenericEvent(ctx, c.aiGatewayRouteChan, route, "QuotaPolicyController", "AIGatewayRouteController", "quota policy changed")
 		}
 	}
 }
@@ -244,7 +252,7 @@ func (c *QuotaPolicyController) notifyAllAIGatewayRoutesInNamespace(ctx context.
 		route := &aiGatewayRoutes.Items[i]
 		c.logger.Info("notifying AIGatewayRoute of QuotaPolicy deletion",
 			"route", route.Name, "namespace", route.Namespace)
-		c.aiGatewayRouteChan <- event.GenericEvent{Object: route}
+		emitGenericEvent(ctx, c.aiGatewayRouteChan, route, "QuotaPolicyController", "AIGatewayRouteController", "quota policy deleted")
 	}
 }
 

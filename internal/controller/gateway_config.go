@@ -49,6 +49,8 @@ func NewGatewayConfigController(
 
 // Reconcile implements [reconcile.TypedReconciler] for [aigv1b1.GatewayConfig].
 func (c *GatewayConfigController) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
+	ctx, span := startReconcileSpan(ctx, "GatewayConfigController", "GatewayConfig", req.NamespacedName)
+	defer span.End()
 	c.logger.Info("Reconciling GatewayConfig", "namespace", req.Namespace, "name", req.Name)
 
 	var gatewayConfig aigv1b1.GatewayConfig
@@ -78,7 +80,7 @@ func (c *GatewayConfigController) syncGatewayConfig(ctx context.Context, gateway
 	}
 
 	// Notify all referencing Gateways to reconcile.
-	c.notifyReferencingGateways(gatewayConfig, referencingGateways)
+	c.notifyReferencingGateways(ctx, gatewayConfig, referencingGateways)
 
 	return nil
 }
@@ -104,12 +106,12 @@ func (c *GatewayConfigController) findReferencingGateways(ctx context.Context, g
 	return referencingGateways, nil
 }
 
-func (c *GatewayConfigController) notifyReferencingGateways(gatewayConfig *aigv1b1.GatewayConfig, referencingGateways []*gwapiv1.Gateway) {
+func (c *GatewayConfigController) notifyReferencingGateways(ctx context.Context, gatewayConfig *aigv1b1.GatewayConfig, referencingGateways []*gwapiv1.Gateway) {
 	for _, gw := range referencingGateways {
 		c.logger.Info("Notifying Gateway of GatewayConfig change",
 			"gateway_namespace", gw.Namespace, "gateway_name", gw.Name,
 			"gatewayconfig_name", gatewayConfig.Name)
-		c.gatewayEventChan <- event.GenericEvent{Object: gw}
+		emitGenericEvent(ctx, c.gatewayEventChan, gw, "GatewayConfigController", "GatewayController", "gateway config changed")
 	}
 }
 

@@ -83,6 +83,8 @@ func NewAIGatewayRouteController(
 
 // Reconcile implements [reconcile.TypedReconciler].
 func (c *AIGatewayRouteController) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
+	ctx, span := startReconcileSpan(ctx, "AIGatewayRouteController", "AIGatewayRoute", req.NamespacedName)
+	defer span.End()
 	c.logger.Info("Reconciling AIGatewayRoute", "namespace", req.Namespace, "name", req.Name)
 
 	var aiGatewayRoute aigv1b1.AIGatewayRoute
@@ -389,7 +391,7 @@ func (c *AIGatewayRouteController) syncGateway(ctx context.Context, namespace, n
 		return fmt.Errorf("failed to get Gateway %s/%s: %w", namespace, name, err)
 	}
 	c.logger.Info("syncing Gateway", "namespace", gw.Namespace, "name", gw.Name)
-	c.gatewayEventChan <- event.GenericEvent{Object: &gw}
+	emitGenericEvent(ctx, c.gatewayEventChan, &gw, "AIGatewayRouteController", "GatewayController", "route changed")
 	return nil
 }
 
